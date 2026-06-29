@@ -109,7 +109,7 @@ export function SmoothSheet({
   useEffect(() => {
     if (isVisible) {
       setModalVisible(true);
-      translateY.value = withSpring(0, spring);
+      translateY.value = withSpring(SCREEN_HEIGHT * 0.06, spring);
       backdropOpacity.value = withTiming(1, { duration: 250 });
     } else {
       translateY.value = withSpring(SCREEN_HEIGHT, spring);
@@ -140,7 +140,7 @@ export function SmoothSheet({
       ) {
         runOnJS(dismiss)();
       } else {
-        translateY.value = withSpring(0, spring);
+        translateY.value = withSpring(SCREEN_HEIGHT * 0.06, spring);
       }
     });
 
