@@ -1,7 +1,8 @@
-import React, { useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import {
   Dimensions,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   Pressable,
   StyleSheet,
@@ -10,6 +11,7 @@ import {
 import {
   Gesture,
   GestureDetector,
+  GestureHandlerRootView,
 } from "react-native-gesture-handler";
 import Animated, {
   runOnJS,
@@ -101,27 +103,28 @@ export function SmoothSheet({
 
   const translateY = useSharedValue(SCREEN_HEIGHT);
   const backdropOpacity = useSharedValue(0);
+  // Keep Modal mounted during the closing animation so the sheet can slide out
+  const [modalVisible, setModalVisible] = useState(isVisible);
 
   useEffect(() => {
     if (isVisible) {
+      setModalVisible(true);
       translateY.value = withSpring(0, spring);
       backdropOpacity.value = withTiming(1, { duration: 250 });
     } else {
       translateY.value = withSpring(SCREEN_HEIGHT, spring);
-      backdropOpacity.value = withTiming(0, { duration: 200 });
+      backdropOpacity.value = withTiming(0, { duration: 200 }, () => {
+        runOnJS(setModalVisible)(false);
+      });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isVisible]);
 
   function dismiss() {
     translateY.value = withSpring(SCREEN_HEIGHT, spring);
-    backdropOpacity.value = withTiming(
-      0,
-      { duration: 200 },
-      () => {
-        runOnJS(onDismiss)();
-      },
-    );
+    backdropOpacity.value = withTiming(0, { duration: 200 }, () => {
+      runOnJS(onDismiss)();
+    });
   }
 
   const panGesture = Gesture.Pan()
@@ -149,57 +152,60 @@ export function SmoothSheet({
     opacity: backdropOpacity.value,
   }));
 
-  if (!isVisible && translateY.value === SCREEN_HEIGHT) {
-    return null;
-  }
-
   return (
-    <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
-      {/* Backdrop */}
-      <Animated.View
-        style={[
-          StyleSheet.absoluteFill,
-          { backgroundColor: backdropColor },
-          backdropStyle,
-        ]}
-        pointerEvents={isVisible ? "auto" : "none"}
-      >
-        <Pressable style={StyleSheet.absoluteFill} onPress={dismiss} />
-      </Animated.View>
-
-      {/* Sheet */}
-      <Animated.View
-        style={[
-          styles.sheet,
-          {
-            borderTopLeftRadius: borderRadius,
-            borderTopRightRadius: borderRadius,
-            backgroundColor,
-            minHeight: SCREEN_HEIGHT * minHeightFraction,
-            maxHeight: SCREEN_HEIGHT * maxHeightFraction,
-          },
-          sheetStyle,
-        ]}
-        pointerEvents="box-none"
-      >
-        {/* Drag handle */}
-        <GestureDetector gesture={panGesture}>
-          <View style={styles.handleArea}>
-            <View
-              style={[styles.handle, { backgroundColor: handleColor }]}
-            />
-          </View>
-        </GestureDetector>
-
-        {/* Content */}
-        <KeyboardAvoidingView
-          behavior={Platform.OS === "ios" ? "padding" : "height"}
-          style={styles.content}
+    <Modal
+      visible={modalVisible}
+      transparent
+      animationType="none"
+      statusBarTranslucent
+      onRequestClose={dismiss}
+    >
+      <GestureHandlerRootView style={StyleSheet.absoluteFill}>
+        {/* Backdrop */}
+        <Animated.View
+          style={[
+            StyleSheet.absoluteFill,
+            { backgroundColor: backdropColor },
+            backdropStyle,
+          ]}
         >
-          {children}
-        </KeyboardAvoidingView>
-      </Animated.View>
-    </View>
+          <Pressable style={StyleSheet.absoluteFill} onPress={dismiss} />
+        </Animated.View>
+
+        {/* Sheet */}
+        <Animated.View
+          style={[
+            styles.sheet,
+            {
+              borderTopLeftRadius: borderRadius,
+              borderTopRightRadius: borderRadius,
+              backgroundColor,
+              minHeight: SCREEN_HEIGHT * minHeightFraction,
+              maxHeight: SCREEN_HEIGHT * maxHeightFraction,
+            },
+            sheetStyle,
+          ]}
+          pointerEvents="box-none"
+        >
+          {/* Drag handle */}
+          <GestureDetector gesture={panGesture}>
+            <View style={styles.handleArea}>
+              <View
+                style={[styles.handle, { backgroundColor: handleColor }]}
+              />
+            </View>
+          </GestureDetector>
+
+          {/* Content */}
+          <KeyboardAvoidingView
+            behavior={Platform.OS === "ios" ? "padding" : "height"}
+            style={styles.content}
+          >
+            {children}
+          </KeyboardAvoidingView>
+        </Animated.View>
+      </GestureHandlerRootView>
+    </Modal>
   );
 }
 
