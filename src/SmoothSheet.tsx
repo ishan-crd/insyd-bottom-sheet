@@ -1,14 +1,3 @@
-/**
- * insyd-bottom-sheet
- *
- * A smooth, physics-based bottom sheet for React Native.
- * Built on react-native-reanimated and react-native-gesture-handler.
- * Compatible with Expo Go, Expo bare workflow, and React Native CLI.
- *
- * Copyright (c) 2024 Ishan Gupta <https://github.com/ishan-crd>
- * MIT License — see LICENSE file for details.
- */
-
 import React, { useEffect } from "react";
 import {
   Dimensions,

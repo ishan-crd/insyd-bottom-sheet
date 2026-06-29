@@ -276,3 +276,5 @@ MIT © 2024 [Ishan Gupta](https://github.com/ishan-crd)
 ## Contributing
 
 Issues and PRs welcome at [github.com/ishan-crd/insyd-bottom-sheet](https://github.com/ishan-crd/insyd-bottom-sheet).
+
+For bug reports, questions, or anything else — reach out at [ishan@insyd.in](mailto:ishan@insyd.in).
