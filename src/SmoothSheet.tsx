@@ -238,12 +238,13 @@ export function SmoothSheet({
       }
     });
 
+  // Keyboard avoidance grows the sheet (animated bottom padding) instead of
+  // translating it — translating lifts the sheet's bottom edge off the screen
+  // floor, exposing a keyboard-height strip of backdrop behind the keyboard.
+  // Growing keeps the sheet anchored so its background fills that strip.
   const sheetStyle = useAnimatedStyle(() => ({
-    transform: [
-      {
-        translateY: translateY.value - keyboardHeight.value,
-      },
-    ],
+    transform: [{ translateY: translateY.value }],
+    paddingBottom: bottomInset + keyboardHeight.value,
   }));
 
   const backdropStyle = useAnimatedStyle(() => ({
@@ -284,7 +285,8 @@ export function SmoothSheet({
               backgroundColor,
               minHeight: windowHeight * minHeightFraction,
               maxHeight: windowHeight * maxHeightFraction,
-              paddingBottom: bottomInset,
+              // paddingBottom lives in sheetStyle so it can grow with the
+              // keyboard.
             },
             sheetStyle,
           ]}
