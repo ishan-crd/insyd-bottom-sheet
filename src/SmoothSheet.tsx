@@ -1,17 +1,17 @@
-import React, { useEffect, useState } from "react";
+import type React from "react";
+import { useEffect, useRef, useState } from "react";
 import {
-  Dimensions,
-  KeyboardAvoidingView,
-  Modal,
+  BackHandler,
+  Keyboard,
   Platform,
   Pressable,
   StyleSheet,
+  useWindowDimensions,
   View,
 } from "react-native";
 import {
   Gesture,
   GestureDetector,
-  GestureHandlerRootView,
 } from "react-native-gesture-handler";
 import Animated, {
   runOnJS,
@@ -21,9 +21,13 @@ import Animated, {
   withTiming,
 } from "react-native-reanimated";
 
-const SCREEN_HEIGHT = Dimensions.get("window").height;
+import { SheetPortal } from "./SheetHost";
 
-const DEFAULT_SPRING = { damping: 28, stiffness: 160, mass: 0.9 };
+const DEFAULT_SPRING = {
+  damping: 28,
+  stiffness: 160,
+  mass: 0.9,
+};
 
 export interface SpringConfig {
   damping?: number;
@@ -39,12 +43,12 @@ export interface SmoothSheetProps {
   /** Content rendered inside the sheet. */
   children: React.ReactNode;
   /**
-   * Minimum height of the sheet as a fraction of screen height (0–1).
+   * Minimum height of the sheet as a fraction of window height (0–1).
    * @default 0.4
    */
   minHeightFraction?: number;
   /**
-   * Maximum height of the sheet as a fraction of screen height (0–1).
+   * Maximum height of the sheet as a fraction of window height (0–1).
    * @default 0.97
    */
   maxHeightFraction?: number;
@@ -83,6 +87,18 @@ export interface SmoothSheetProps {
    * Merged over the default: { damping: 28, stiffness: 160, mass: 0.9 }
    */
   springConfig?: SpringConfig;
+  /**
+   * Extra padding applied below the sheet content, e.g. the bottom safe-area
+   * inset on gesture-nav Android devices / notched iPhones. Pass
+   * `useSafeAreaInsets().bottom` from the host app.
+   * @default 0
+   */
+  bottomInset?: number;
+  /**
+   * Accessibility label announced for the backdrop's dismiss action.
+   * @default "Close"
+   */
+  dismissAccessibilityLabel?: string;
 }
 
 export function SmoothSheet({
@@ -98,34 +114,112 @@ export function SmoothSheet({
   dismissThreshold = 80,
   dismissVelocityThreshold = 800,
   springConfig,
+  bottomInset = 0,
+  dismissAccessibilityLabel = "Close",
 }: SmoothSheetProps) {
   const spring = { ...DEFAULT_SPRING, ...springConfig };
 
-  const translateY = useSharedValue(SCREEN_HEIGHT);
+  // Live window height — correct across rotation, split-screen, and foldables.
+  const { height: windowHeight } = useWindowDimensions();
+
+  // The sheet is *translated* above the keyboard, driven by global Keyboard
+  // events. Because the sheet now renders in the app's own window (via
+  // SheetPortal, not a native <Modal>), the focused TextInput lives in the same
+  // window these events observe — so this fires and reports the right height in
+  // Expo Go, dev clients, AND release builds, including Android 15+ forced
+  // edge-to-edge where a Modal's separate window used to break it.
+  const keyboardHeight = useSharedValue(0);
+
+  useEffect(() => {
+    const showEvent =
+      Platform.OS === "ios"
+        ? "keyboardWillShow"
+        : "keyboardDidShow";
+    const hideEvent =
+      Platform.OS === "ios"
+        ? "keyboardWillHide"
+        : "keyboardDidHide";
+    const showSub = Keyboard.addListener(showEvent, (e) => {
+      keyboardHeight.value = withTiming(
+        e.endCoordinates.height,
+        {
+          duration:
+            Platform.OS === "ios"
+              ? (e.duration ?? 250)
+              : 160,
+        },
+      );
+    });
+    const hideSub = Keyboard.addListener(hideEvent, (e) => {
+      keyboardHeight.value = withTiming(0, {
+        duration:
+          Platform.OS === "ios" ? (e.duration ?? 250) : 160,
+      });
+    });
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const translateY = useSharedValue(windowHeight);
   const backdropOpacity = useSharedValue(0);
-  // Keep Modal mounted during the closing animation so the sheet can slide out
-  const [modalVisible, setModalVisible] = useState(isVisible);
+  // Keep the sheet mounted through the closing animation so it can slide out.
+  const [mounted, setMounted] = useState(isVisible);
+  // Guards against double-dismiss (back button mashing, backdrop tap during close)
+  const isClosing = useRef(false);
 
   useEffect(() => {
     if (isVisible) {
-      setModalVisible(true);
+      isClosing.current = false;
+      setMounted(true);
       translateY.value = withSpring(0, spring);
-      backdropOpacity.value = withTiming(1, { duration: 250 });
-    } else {
-      translateY.value = withSpring(SCREEN_HEIGHT, spring);
-      backdropOpacity.value = withTiming(0, { duration: 200 }, () => {
-        runOnJS(setModalVisible)(false);
+      backdropOpacity.value = withTiming(1, {
+        duration: 250,
       });
+    } else {
+      translateY.value = withSpring(windowHeight, spring);
+      backdropOpacity.value = withTiming(
+        0,
+        { duration: 200 },
+        (finished) => {
+          if (finished) runOnJS(setMounted)(false);
+        },
+      );
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isVisible]);
 
   function dismiss() {
-    translateY.value = withSpring(SCREEN_HEIGHT, spring);
-    backdropOpacity.value = withTiming(0, { duration: 200 }, () => {
-      runOnJS(onDismiss)();
-    });
+    if (isClosing.current) return;
+    isClosing.current = true;
+    translateY.value = withSpring(windowHeight, spring);
+    backdropOpacity.value = withTiming(
+      0,
+      { duration: 200 },
+      (finished) => {
+        if (finished) {
+          runOnJS(setMounted)(false);
+          runOnJS(onDismiss)();
+        }
+      },
+    );
   }
+
+  // Android hardware back closes the sheet (replaces Modal's onRequestClose).
+  useEffect(() => {
+    if (!mounted || Platform.OS !== "android") return;
+    const sub = BackHandler.addEventListener(
+      "hardwareBackPress",
+      () => {
+        dismiss();
+        return true;
+      },
+    );
+    return () => sub.remove();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mounted]);
 
   const panGesture = Gesture.Pan()
     .onUpdate((e) => {
@@ -145,22 +239,25 @@ export function SmoothSheet({
     });
 
   const sheetStyle = useAnimatedStyle(() => ({
-    transform: [{ translateY: translateY.value }],
+    transform: [
+      {
+        translateY: translateY.value - keyboardHeight.value,
+      },
+    ],
   }));
 
   const backdropStyle = useAnimatedStyle(() => ({
     opacity: backdropOpacity.value,
   }));
 
+  if (!mounted) return null;
+
   return (
-    <Modal
-      visible={modalVisible}
-      transparent
-      animationType="none"
-      statusBarTranslucent
-      onRequestClose={dismiss}
-    >
-      <GestureHandlerRootView style={StyleSheet.absoluteFill}>
+    <SheetPortal>
+      <View
+        style={StyleSheet.absoluteFill}
+        pointerEvents="box-none"
+      >
         {/* Backdrop */}
         <Animated.View
           style={[
@@ -169,7 +266,12 @@ export function SmoothSheet({
             backdropStyle,
           ]}
         >
-          <Pressable style={StyleSheet.absoluteFill} onPress={dismiss} />
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={dismiss}
+            accessibilityRole="button"
+            accessibilityLabel={dismissAccessibilityLabel}
+          />
         </Animated.View>
 
         {/* Sheet */}
@@ -180,32 +282,33 @@ export function SmoothSheet({
               borderTopLeftRadius: borderRadius,
               borderTopRightRadius: borderRadius,
               backgroundColor,
-              minHeight: SCREEN_HEIGHT * minHeightFraction,
-              maxHeight: SCREEN_HEIGHT * maxHeightFraction,
+              minHeight: windowHeight * minHeightFraction,
+              maxHeight: windowHeight * maxHeightFraction,
+              paddingBottom: bottomInset,
             },
             sheetStyle,
           ]}
           pointerEvents="box-none"
+          accessibilityViewIsModal
         >
           {/* Drag handle */}
           <GestureDetector gesture={panGesture}>
             <View style={styles.handleArea}>
               <View
-                style={[styles.handle, { backgroundColor: handleColor }]}
+                style={[
+                  styles.handle,
+                  { backgroundColor: handleColor },
+                ]}
               />
             </View>
           </GestureDetector>
 
-          {/* Content */}
-          <KeyboardAvoidingView
-            behavior={Platform.OS === "ios" ? "padding" : "height"}
-            style={styles.content}
-          >
-            {children}
-          </KeyboardAvoidingView>
+          {/* Content — keyboard avoidance is handled by translating the whole
+              sheet (see sheetStyle); no KeyboardAvoidingView needed. */}
+          <View style={styles.content}>{children}</View>
         </Animated.View>
-      </GestureHandlerRootView>
-    </Modal>
+      </View>
+    </SheetPortal>
   );
 }
 
