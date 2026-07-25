@@ -14,7 +14,6 @@ import {
   GestureDetector,
 } from "react-native-gesture-handler";
 import Animated, {
-  runOnJS,
   useAnimatedStyle,
   useSharedValue,
   withSpring,
@@ -170,9 +169,31 @@ export function SmoothSheet({
   // Guards against double-dismiss (back button mashing, backdrop tap during close)
   const isClosing = useRef(false);
 
+  // Unmount is sequenced with a JS-side timer instead of a Reanimated
+  // animation-completion callback. runOnJS/scheduleOnRN from the UI thread has
+  // a use-after-free race in react-native-worklets 0.10.0 (reanimated #9776):
+  // the remote-function registry entry can be freed before the pending call
+  // runs, segfaulting — bottom sheets (rapid mount/unmount) are the canonical
+  // trigger. The backdrop fade is a fixed 200ms withTiming, so a 220ms timer
+  // lands just after it and the swap is invisible.
+  const CLOSE_MS = 220;
+  const closeTimer = useRef<ReturnType<
+    typeof setTimeout
+  > | null>(null);
+
+  function clearCloseTimer() {
+    if (closeTimer.current) {
+      clearTimeout(closeTimer.current);
+      closeTimer.current = null;
+    }
+  }
+
+  useEffect(() => clearCloseTimer, []);
+
   useEffect(() => {
     if (isVisible) {
       isClosing.current = false;
+      clearCloseTimer();
       setMounted(true);
       translateY.value = withSpring(0, spring);
       backdropOpacity.value = withTiming(1, {
@@ -180,13 +201,14 @@ export function SmoothSheet({
       });
     } else {
       translateY.value = withSpring(windowHeight, spring);
-      backdropOpacity.value = withTiming(
-        0,
-        { duration: 200 },
-        (finished) => {
-          if (finished) runOnJS(setMounted)(false);
-        },
-      );
+      backdropOpacity.value = withTiming(0, {
+        duration: 200,
+      });
+      clearCloseTimer();
+      closeTimer.current = setTimeout(() => {
+        closeTimer.current = null;
+        setMounted(false);
+      }, CLOSE_MS);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isVisible]);
@@ -195,16 +217,15 @@ export function SmoothSheet({
     if (isClosing.current) return;
     isClosing.current = true;
     translateY.value = withSpring(windowHeight, spring);
-    backdropOpacity.value = withTiming(
-      0,
-      { duration: 200 },
-      (finished) => {
-        if (finished) {
-          runOnJS(setMounted)(false);
-          runOnJS(onDismiss)();
-        }
-      },
-    );
+    backdropOpacity.value = withTiming(0, {
+      duration: 200,
+    });
+    clearCloseTimer();
+    closeTimer.current = setTimeout(() => {
+      closeTimer.current = null;
+      setMounted(false);
+      onDismiss();
+    }, CLOSE_MS);
   }
 
   // Android hardware back closes the sheet (replaces Modal's onRequestClose).
@@ -221,7 +242,12 @@ export function SmoothSheet({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mounted]);
 
+  // runOnJS(true): callbacks run on the JS thread, so no worklet→JS
+  // remote-function crossing (see the worklets 0.10.0 use-after-free note
+  // above). Setting a shared value from JS still animates on the UI thread;
+  // for a drag handle the one-frame latency is imperceptible.
   const panGesture = Gesture.Pan()
+    .runOnJS(true)
     .onUpdate((e) => {
       if (e.translationY > 0) {
         translateY.value = e.translationY;
@@ -232,7 +258,7 @@ export function SmoothSheet({
         e.translationY > dismissThreshold ||
         e.velocityY > dismissVelocityThreshold
       ) {
-        runOnJS(dismiss)();
+        dismiss();
       } else {
         translateY.value = withSpring(0, spring);
       }
